@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Peak Shaving Report</title>
+<style>
+  :root {
+    --border: #e2e8f0;
+    --text: #1e293b;
+    --muted: #64748b;
+    --accent: #15803d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--text);
+    background: #f8fafc;
+  }
+  header {
+    padding: 20px 28px 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  h1 { font-size: 20px; margin: 0; font-weight: 650; }
+  .sub { color: var(--muted); font-size: 13px; margin-top: 4px; }
+  .toggle {
+    display: inline-flex;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    background: #fff;
+  }
+  .toggle button {
+    border: none;
+    background: transparent;
+    padding: 8px 16px;
+    font-size: 13px;
+    font-weight: 550;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .toggle button.active {
+    background: var(--accent);
+    color: #fff;
+  }
+  .table-wrap {
+    margin: 0 28px 28px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: #fff;
+    overflow: auto;
+    max-height: calc(100vh - 130px);
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+  }
+  table { border-collapse: separate; border-spacing: 0; width: 100%; font-size: 12.5px; }
+  th, td {
+    padding: 7px 12px;
+    text-align: right;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: #f1f5f9;
+    font-weight: 600;
+    color: var(--muted);
+  }
+  tbody th {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    background: #f1f5f9;
+    text-align: left;
+    font-weight: 600;
+  }
+  thead th:first-child { left: 0; z-index: 3; text-align: left; }
+  tbody tr:last-child th, tbody tr:last-child td { border-bottom: none; }
+  td.empty { color: #cbd5e1; text-align: center; }
+  .legend {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .legend .bar {
+    width: 120px;
+    height: 10px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: linear-gradient(to right, #ffffff, rgb(21, 128, 61));
+  }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Peak Shaving Report</h1>
+    <div class="sub" id="subtitle"></div>
+  </div>
+  <div style="display:flex; align-items:center; gap:16px;">
+    <span class="legend">low <span class="bar"></span> high</span>
+    <div class="toggle">
+      <button id="btn-demand" class="active">Demand shaved (kW)</button>
+      <button id="btn-energy">Energy delivered (kWh)</button>
+    </div>
+  </div>
+</header>
+<div class="table-wrap">
+  <table id="matrix"></table>
+</div>
+<script>
+const DATA = __DATA_JSON__;
+
+const customers = Object.keys(DATA.customers).sort((a, b) => {
+  const na = Number(a), nb = Number(b);
+  if (!isNaN(na) && !isNaN(nb)) return na - nb;
+  return a.localeCompare(b);
+});
+
+const monthSet = new Set();
+for (const id of customers) {
+  for (const m of DATA.customers[id]) monthSet.add(m.month);
+}
+const months = [...monthSet].sort();
+
+const METRICS = {
+  demand: { key: "total_demand_shaved_kw", label: "Demand shaved (kW)" },
+  energy: { key: "total_energy_delivered_kwh", label: "Energy delivered (kWh)" },
+};
+let metric = "demand";
+
+// lookup[customer][month] = month record
+const lookup = {};
+for (const id of customers) {
+  lookup[id] = {};
+  for (const m of DATA.customers[id]) lookup[id][m.month] = m;
+}
+
+const GREEN = [21, 128, 61];
+function cellColor(v, max) {
+  if (max <= 0) return "#ffffff";
+  const t = Math.max(0, Math.min(1, v / max));
+  const c = GREEN.map(g => Math.round(255 + (g - 255) * t));
+  return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
+}
+
+function fmt(v) {
+  return v.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+}
+
+function monthLabel(m) {
+  const [y, mo] = m.split("-");
+  const names = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  return `${names[Number(mo) - 1]} ${y}`;
+}
+
+function render() {
+  const key = METRICS[metric].key;
+  let max = 0;
+  for (const id of customers) {
+    for (const m of months) {
+      const rec = lookup[id][m];
+      if (rec) max = Math.max(max, rec[key]);
+    }
+  }
+
+  let html = "<thead><tr><th>Customer</th>";
+  for (const m of months) html += `<th>${monthLabel(m)}</th>`;
+  html += "</tr></thead><tbody>";
+  for (const id of customers) {
+    html += `<tr><th>${id}</th>`;
+    for (const m of months) {
+      const rec = lookup[id][m];
+      if (rec) {
+        const v = rec[key];
+        const t = max > 0 ? v / max : 0;
+        const fg = t > 0.6 ? "#ffffff" : "var(--text)";
+        html += `<td style="background:${cellColor(v, max)}; color:${fg}">${fmt(v)}</td>`;
+      } else {
+        html += `<td class="empty">&ndash;</td>`;
+      }
+    }
+    html += "</tr>";
+  }
+  html += "</tbody>";
+  document.getElementById("matrix").innerHTML = html;
+  document.getElementById("subtitle").textContent =
+    `${METRICS[metric].label} per customer per month · N=${DATA.params.N}, L=${DATA.params.L} · ${customers.length} customers`;
+  document.getElementById("btn-demand").classList.toggle("active", metric === "demand");
+  document.getElementById("btn-energy").classList.toggle("active", metric === "energy");
+}
+
+document.getElementById("btn-demand").addEventListener("click", () => { metric = "demand"; render(); });
+document.getElementById("btn-energy").addEventListener("click", () => { metric = "energy"; render(); });
+render();
+</script>
+</body>
+</html>
