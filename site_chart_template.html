@@ -1,0 +1,860 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Site Detail · Peak Shaving</title>
+  <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+
+    :root {
+      --bg: #f4f6f8;
+      --text: #1a1a2e;
+      --muted: #525964;
+      --border: #dde1e6;
+      --accent: #1a73e8;
+      --shave: #15803d;
+    }
+
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+
+    header {
+      background: #1a1a2e;
+      color: #fff;
+      padding: 1rem 1.5rem;
+    }
+
+    header h1 { margin: 0; font-size: 1.25rem; font-weight: 600; }
+    header p { margin: 0.25rem 0 0; font-size: 0.875rem; opacity: 0.75; }
+
+    .wrap { padding: 1.25rem 1.5rem; max-width: 1200px; margin: 0 auto; }
+
+    .site-header {
+      background: #fff;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      margin-bottom: 1rem;
+    }
+    .site-header h2 { margin: 0 0 0.25rem; }
+    .site-meta { font-size: 0.875rem; color: var(--muted); }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+      align-items: flex-end;
+      background: #fff;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      margin-bottom: 1rem;
+    }
+
+    .control-group label {
+      display: block;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--muted);
+      margin-bottom: 0.25rem;
+    }
+
+    .control-group input[type="datetime-local"] {
+      padding: 0.4rem 0.5rem;
+      border: 1px solid #c1c7cd;
+      border-radius: 6px;
+      font-size: 0.875rem;
+    }
+
+    .span-group { flex: 1; min-width: 200px; }
+    .span-label {
+      display: block;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--muted);
+      margin-bottom: 0.25rem;
+    }
+    .span-buttons { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+    .span-btn {
+      padding: 0.35rem 0.65rem;
+      border: 1px solid #c1c7cd;
+      border-radius: 6px;
+      background: #fff;
+      font-size: 0.8125rem;
+      cursor: pointer;
+      color: var(--text);
+    }
+    .span-btn:hover { background: #eef1f4; }
+    .span-btn.active { background: #1a1a2e; color: #fff; border-color: #1a1a2e; }
+
+    .toggle-label {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-size: 0.875rem;
+      cursor: pointer;
+    }
+
+    .stats { display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: 1rem; }
+    .stat {
+      background: #fff;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+      min-width: 140px;
+      flex: 1;
+    }
+    .stat-value { font-size: 1.25rem; font-weight: 600; }
+    .stat-label { font-size: 0.75rem; color: #697077; }
+    .stat.shave .stat-value { color: var(--shave); }
+
+    #chart {
+      background: #fff;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      min-height: 500px;
+    }
+
+    .empty-state { padding: 2rem; text-align: center; color: #697077; }
+
+    .section {
+      background: #fff;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      margin-top: 1rem;
+    }
+    .section h3 { margin: 0 0 0.75rem; font-size: 1rem; }
+
+    table.months {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+    }
+    table.months th, table.months td {
+      padding: 0.4rem 0.6rem;
+      text-align: right;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    table.months th:first-child, table.months td:first-child { text-align: left; }
+    table.months thead th {
+      color: var(--muted);
+      font-weight: 600;
+      border-bottom: 2px solid var(--border);
+    }
+    table.months tfoot td {
+      font-weight: 700;
+      border-top: 2px solid var(--border);
+      border-bottom: none;
+      background: #f1f5f9;
+    }
+    table.months tbody tr.month-row { cursor: pointer; }
+    table.months tbody tr.month-row:hover td { background: #eaf1fd; }
+    table.months tbody tr.month-row.selected td { background: #d9e7fb; }
+    table.months tbody tr.month-row td:first-child { color: var(--accent); }
+
+    .error {
+      background: #fdecea;
+      border: 1px solid #f5c6cb;
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      color: #721c24;
+    }
+    .error code {
+      background: #fff3cd;
+      padding: 0.1rem 0.35rem;
+      border-radius: 4px;
+    }
+
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Site Detail</h1>
+    <p>Electricity consumption time series &amp; peak shaving summary</p>
+  </header>
+
+  <div class="wrap">
+    <div id="load-error" class="error hidden"></div>
+
+    <div id="chart-panel" class="hidden">
+      <div class="site-header">
+        <h2 id="site-title">Site</h2>
+        <div class="site-meta" id="site-meta"></div>
+      </div>
+
+      <div class="controls">
+        <div class="control-group">
+          <label for="start-datetime">Start</label>
+          <input type="datetime-local" id="start-datetime" value="2012-01-01T00:00" step="60">
+        </div>
+        <div class="control-group">
+          <label for="end-datetime">End</label>
+          <input type="datetime-local" id="end-datetime" value="2012-12-31T23:59" step="60">
+        </div>
+        <div class="control-group span-group">
+          <span class="span-label">Span</span>
+          <div class="span-buttons" id="span-buttons">
+            <button type="button" class="span-btn active" data-span="all">All</button>
+            <button type="button" class="span-btn" data-span="year">1 year</button>
+            <button type="button" class="span-btn" data-span="month">1 month</button>
+            <button type="button" class="span-btn" data-span="week">1 week</button>
+            <button type="button" class="span-btn" data-span="3days">3 days</button>
+            <button type="button" class="span-btn" data-span="day">1 day</button>
+            <button type="button" class="span-btn" data-span="hour">1 hour</button>
+          </div>
+        </div>
+        <div class="control-group">
+          <span class="span-label">Units</span>
+          <div class="span-buttons" id="unit-buttons">
+            <button type="button" class="span-btn active" data-unit="kW">kW</button>
+            <button type="button" class="span-btn" data-unit="kWh">kWh</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="stats" id="stats"></div>
+      <div id="chart"></div>
+      <p id="chart-note" class="site-meta" style="margin-top:0.5rem;"></p>
+
+      <div class="section">
+        <h3 id="summary-title">Peak shaving by month</h3>
+        <div style="overflow:auto;">
+          <table class="months" id="months-table"></table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const DATA_MIN_TS = "2012-01-01T00:00:00";
+    const DATA_MAX_TS = "2012-12-31T23:59:59";
+
+    const state = {
+      selectedSite: null,
+      siteData: null,
+      activeSpan: "all",
+      unit: "kW",
+      syncingFromChart: false,
+    };
+
+    // A 15-minute interval is a quarter hour, so average demand (kW) is the
+    // interval energy (kWh) times 4. Energy stays as kWh.
+    const INTERVALS_PER_HOUR = 4;
+    function unitFactor() {
+      return state.unit === "kW" ? INTERVALS_PER_HOUR : 1;
+    }
+
+    const chartPanel = document.getElementById("chart-panel");
+    const loadError = document.getElementById("load-error");
+
+    function formatNumber(n) {
+      return n.toLocaleString(undefined, { maximumFractionDigits: 1 });
+    }
+
+    function formatPct(n) {
+      return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + "%";
+    }
+
+    function normalizeDatetimeInput(val) {
+      if (!val) return "";
+      const v = val.trim();
+      if (v.length === 10) return v + "T00:00:00";
+      if (v.length === 16) return v + ":00";
+      return v.slice(0, 19);
+    }
+
+    function toDatetimeLocalValue(ts) {
+      return normalizeDatetimeInput(ts).slice(0, 16);
+    }
+
+    function parseUtcTs(ts) {
+      return Date.parse(normalizeDatetimeInput(ts) + "Z");
+    }
+
+    function formatUtcTs(ms) {
+      return new Date(ms).toISOString().slice(0, 19);
+    }
+
+    function getTzOffsetMs(utcMs, timeZone) {
+      const d = new Date(utcMs);
+      const toMs = (tz) => {
+        const parts = new Intl.DateTimeFormat("en-US", {
+          timeZone: tz,
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: false,
+        }).formatToParts(d);
+        const g = (t) => Number(parts.find((p) => p.type === t).value);
+        return Date.UTC(g("year"), g("month") - 1, g("day"), g("hour"), g("minute"), g("second"));
+      };
+      return toMs(timeZone) - toMs("UTC");
+    }
+
+    function utcToLocalWallTs(utcTs, timeZone) {
+      const ms = parseUtcTs(utcTs);
+      return formatUtcTs(ms + getTzOffsetMs(ms, timeZone));
+    }
+
+    function localWallToUtcTs(localTs, timeZone) {
+      const localMs = parseUtcTs(normalizeDatetimeInput(localTs));
+      let utcMs = localMs;
+      for (let i = 0; i < 4; i++) {
+        utcMs = localMs - getTzOffsetMs(utcMs, timeZone);
+      }
+      return formatUtcTs(utcMs);
+    }
+
+    function siteTimezone() {
+      return state.selectedSite?.timezone || null;
+    }
+
+    // Inputs and the chart axis always display the site's local wall time;
+    // stored data is UTC, so convert local <-> UTC at the boundaries.
+    function inputTsToUtc(ts) {
+      const norm = normalizeDatetimeInput(ts);
+      const tz = siteTimezone();
+      return tz ? localWallToUtcTs(norm, tz) : norm;
+    }
+
+    function utcTsToDisplay(utcTs) {
+      const tz = siteTimezone();
+      return tz ? utcToLocalWallTs(utcTs, tz) : utcTs;
+    }
+
+    function computeRange(endInput, span, tzAdjust, timeZone) {
+      const endNorm = normalizeDatetimeInput(endInput);
+      const minMs = parseUtcTs(DATA_MIN_TS);
+
+      if (span === "all") {
+        // "All" always spans the full dataset, regardless of the current End
+        // (which may have moved after a month click or zoom).
+        const startTs = tzAdjust && timeZone
+          ? utcToLocalWallTs(DATA_MIN_TS, timeZone)
+          : DATA_MIN_TS;
+        const endTs = tzAdjust && timeZone
+          ? utcToLocalWallTs(DATA_MAX_TS, timeZone)
+          : DATA_MAX_TS;
+        return { startTs, endTs };
+      }
+
+      const endMs = tzAdjust && timeZone
+        ? parseUtcTs(localWallToUtcTs(endNorm, timeZone))
+        : parseUtcTs(endNorm);
+
+      let startMs;
+      if (span === "hour") {
+        startMs = Math.max(minMs, endMs - 3600000);
+      } else {
+        const startD = new Date(endMs);
+        switch (span) {
+          case "year":
+            startD.setUTCFullYear(startD.getUTCFullYear() - 1);
+            break;
+          case "month":
+            startD.setUTCMonth(startD.getUTCMonth() - 1);
+            break;
+          case "week":
+            startD.setUTCDate(startD.getUTCDate() - 7);
+            break;
+          case "3days":
+            startD.setUTCDate(startD.getUTCDate() - 3);
+            break;
+          case "day":
+            startD.setUTCDate(startD.getUTCDate() - 1);
+            break;
+        }
+        startMs = Math.max(minMs, startD.getTime());
+      }
+
+      let startTs = formatUtcTs(startMs);
+      if (tzAdjust && timeZone) {
+        startTs = utcToLocalWallTs(startTs, timeZone);
+      }
+      return { startTs, endTs: endNorm };
+    }
+
+    function applyRangeToInputs(range) {
+      document.getElementById("start-datetime").value = toDatetimeLocalValue(range.startTs);
+      document.getElementById("end-datetime").value = toDatetimeLocalValue(range.endTs);
+    }
+
+    function filterByDate(data, startTs, endTs) {
+      return data.filter(([ts]) => ts >= startTs && ts <= endTs);
+    }
+
+    function updateSpanButtons() {
+      document.querySelectorAll(".span-btn").forEach((btn) => {
+        btn.classList.toggle("active", btn.dataset.span === state.activeSpan);
+      });
+    }
+
+    function plotlyAxisRangeToInputValue(val) {
+      if (val == null || val === "") return "";
+      if (typeof val === "number") {
+        return toDatetimeLocalValue(utcTsToDisplay(formatUtcTs(val)));
+      }
+      const raw = String(val).trim().replace(" ", "T").replace(/\.000$/, "");
+      if (raw.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(raw)) {
+        return toDatetimeLocalValue(utcTsToDisplay(normalizeDatetimeInput(raw.replace(/Z$/, ""))));
+      }
+      return toDatetimeLocalValue(normalizeDatetimeInput(raw));
+    }
+
+    function extractXaxisRange(eventData) {
+      if (!eventData || eventData["xaxis.autorange"]) return null;
+      if (eventData["xaxis.range"]) {
+        const r = eventData["xaxis.range"];
+        return r.length >= 2 ? [r[0], r[1]] : null;
+      }
+      if ("xaxis.range[0]" in eventData && "xaxis.range[1]" in eventData) {
+        return [eventData["xaxis.range[0]"], eventData["xaxis.range[1]"]];
+      }
+      return null;
+    }
+
+    function renderStats(points) {
+      const isPower = state.unit === "kW";
+      const factor = unitFactor();
+      const stats = computeStats(points);
+      const peakLabel = isPower ? "Peak demand (kW)" : "Peak interval (kWh)";
+      document.getElementById("stats").innerHTML = `
+        <div class="stat">
+          <div class="stat-value">${formatNumber(stats.total)}</div>
+          <div class="stat-label">Total kWh</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">${formatNumber(stats.peak * factor)}</div>
+          <div class="stat-label">${peakLabel}</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">${formatNumber(stats.avgDaily)}</div>
+          <div class="stat-label">Avg daily kWh</div>
+        </div>
+      `;
+    }
+
+    // Recompute the summary stats for whatever range the inputs currently hold,
+    // without redrawing the chart (used while scrolling/zooming the slider).
+    function syncStatsToInputs() {
+      if (!state.siteData) return;
+      const startInput = normalizeDatetimeInput(document.getElementById("start-datetime").value);
+      const endInput = normalizeDatetimeInput(document.getElementById("end-datetime").value);
+      const points = filterByDate(
+        state.siteData.readings,
+        inputTsToUtc(startInput),
+        inputTsToUtc(endInput)
+      ).map(([ts, v]) => [ts, v]);
+      renderStats(points);
+    }
+
+    function onChartRelayout(eventData) {
+      if (state.syncingFromChart) return;
+
+      const startEl = document.getElementById("start-datetime");
+      const endEl = document.getElementById("end-datetime");
+
+      // Double-click / autorange: snap the inputs back to the loaded window.
+      if (eventData && eventData["xaxis.autorange"]) {
+        if (state.viewStartVal != null) {
+          startEl.value = state.viewStartVal;
+          endEl.value = state.viewEndVal;
+          syncStatsToInputs();
+        }
+        return;
+      }
+
+      const range = extractXaxisRange(eventData);
+      if (!range) return;
+
+      const newStart = plotlyAxisRangeToInputValue(range[0]);
+      const newEnd = plotlyAxisRangeToInputValue(range[1]);
+      if (!newStart || !newEnd) return;
+      if (startEl.value === newStart && endEl.value === newEnd) return;
+
+      // Scrolling/zooming within the loaded range: just sync inputs + stats.
+      // Plotly handles the view change, so the range slider stays intact.
+      state.activeSpan = null;
+      clearMonthSelection();
+      updateSpanButtons();
+      startEl.value = newStart;
+      endEl.value = newEnd;
+      syncStatsToInputs();
+    }
+
+    function bindChartRelayout() {
+      const chartEl = document.getElementById("chart");
+      if (chartEl._relayoutBound) return;
+      chartEl.on("plotly_relayout", onChartRelayout);
+      chartEl._relayoutBound = true;
+    }
+
+    function computeStats(points) {
+      if (!points.length) return { total: 0, peak: 0, avgDaily: 0 };
+      const total = points.reduce((sum, [, v]) => sum + v, 0);
+      const peak = Math.max(...points.map(([, v]) => v));
+      const dates = new Set(points.map(([ts]) => ts.slice(0, 10)));
+      const avgDaily = total / dates.size;
+      return { total, peak, avgDaily };
+    }
+
+    function updateChart() {
+      if (!state.siteData) return;
+
+      const startInput = normalizeDatetimeInput(document.getElementById("start-datetime").value);
+      const endInput = normalizeDatetimeInput(document.getElementById("end-datetime").value);
+      const filterStartTs = inputTsToUtc(startInput);
+      const filterEndTs = inputTsToUtc(endInput);
+
+      const points = filterByDate(state.siteData.readings, filterStartTs, filterEndTs)
+        .map(([ts, v]) => [ts, v]);
+      const isPower = state.unit === "kW";
+      const factor = unitFactor();
+      const intervalLabel = isPower
+        ? "15-minute average demand (kW)"
+        : "15-minute interval energy (kWh)";
+      const windows = buildWindowShapes(startInput, endInput);
+
+      renderStats(points);
+      // Remember the loaded window so a double-click (autorange) can restore it
+      // without a re-filter; zooming/panning within it is handled natively.
+      state.viewStartVal = document.getElementById("start-datetime").value;
+      state.viewEndVal = document.getElementById("end-datetime").value;
+
+      const tz = siteTimezone();
+      const windowNote = windows.shapes.length
+        ? ` · ${windows.count} shaved window${windows.count === 1 ? "" : "s"} flagged` +
+          (windows.adjacentCount ? ` (${windows.adjacentCount} adjacent)` : "")
+        : "";
+      const timeNote = tz ? `Times shown in ${tz}.` : "Times shown in UTC.";
+      document.getElementById("chart-note").textContent =
+        `${intervalLabel} · ${timeNote}${windowNote}`;
+
+      if (!points.length) {
+        Plotly.purge("chart");
+        document.getElementById("chart").innerHTML =
+          '<p class="empty-state">No data in selected date range.</p>';
+        return;
+      }
+
+      const axisTitle = tz ? `Date/time (${tz})` : "Date/time (UTC)";
+
+      const traces = [{
+        x: points.map(([ts]) => utcTsToDisplay(ts)),
+        y: points.map(([, v]) => v * factor),
+        type: "scatter",
+        mode: "lines",
+        line: { color: "#1a73e8", width: 1.5 },
+        name: `Site ${state.siteData.site_id}`,
+        hovertemplate: `%{y:,.1f} ${state.unit}<extra></extra>`,
+      }];
+      // Legend proxies so the window colors are explained (shapes have no legend).
+      if (windows.count) {
+        traces.push(legendProxy("Shaved window", WINDOW_COLORS.normal.line));
+      }
+      if (windows.adjacentCount) {
+        traces.push(legendProxy("Adjacent window", WINDOW_COLORS.adjacent.line));
+      }
+
+      state.syncingFromChart = true;
+      Plotly.newPlot(
+        "chart",
+        traces,
+        {
+          margin: { t: 28, r: 24, b: 48, l: 56 },
+          dragmode: "zoom",
+          xaxis: {
+            title: axisTitle,
+            type: "date",
+            fixedrange: false,
+            rangeslider: { visible: true, thickness: 0.12 },
+          },
+          yaxis: { title: isPower ? "Demand (kW)" : "Energy (kWh)" },
+          hovermode: "x unified",
+          shapes: windows.shapes,
+          showlegend: true,
+          legend: { orientation: "h", x: 0, y: 1.12, font: { size: 11 } },
+        },
+        {
+          responsive: true,
+          displayModeBar: true,
+          scrollZoom: true,
+          modeBarButtonsToRemove: ["lasso2d", "select2d"],
+        }
+      ).then(() => {
+        state.syncingFromChart = false;
+        bindChartRelayout();
+      });
+    }
+
+    const WINDOW_COLORS = {
+      normal: { fill: "rgba(22, 163, 74, 0.15)", line: "rgba(22, 163, 74, 0.9)" },
+      adjacent: { fill: "rgba(234, 88, 12, 0.18)", line: "rgba(234, 88, 12, 0.95)" },
+    };
+
+    // Peak window timestamps are stored in site-local wall time (from the
+    // analysis), which matches the chart's always-local x-axis.
+    function peakChartX(localTs) {
+      return normalizeDatetimeInput(String(localTs).replace(" ", "T"));
+    }
+
+    function buildWindowShapes(startLocal, endLocal) {
+      const months = state.siteData.months || [];
+      const shapes = [];
+      let count = 0;
+      let adjacentCount = 0;
+      for (const m of months) {
+        for (const p of m.peaks || []) {
+          const x0 = peakChartX(p.start);
+          const x1 = peakChartX(p.end);
+          // Skip windows entirely outside the visible range.
+          if (x1 < startLocal || x0 > endLocal) continue;
+          // Clamp to the visible range so shapes don't expand the axis.
+          const cx0 = x0 < startLocal ? startLocal : x0;
+          const cx1 = x1 > endLocal ? endLocal : x1;
+          const c = p.contiguous ? WINDOW_COLORS.adjacent : WINDOW_COLORS.normal;
+          shapes.push({
+            type: "rect",
+            xref: "x",
+            yref: "paper",
+            x0: cx0,
+            x1: cx1,
+            y0: 0,
+            y1: 1,
+            fillcolor: c.fill,
+            // Always draw a 1px border so narrow windows stay visible when the
+            // whole year is in view (the fill alone is sub-pixel at that zoom).
+            line: { width: 1, color: c.line, dash: p.contiguous ? "dot" : "solid" },
+            layer: "below",
+          });
+          count += 1;
+          if (p.contiguous) adjacentCount += 1;
+        }
+      }
+      return { shapes, count, adjacentCount };
+    }
+
+    function legendProxy(name, color) {
+      return {
+        x: [null],
+        y: [null],
+        type: "scatter",
+        mode: "markers",
+        marker: { size: 11, symbol: "square", color },
+        name,
+        hoverinfo: "skip",
+        showlegend: true,
+      };
+    }
+
+    function monthLabel(m) {
+      const [y, mo] = m.split("-");
+      const names = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+      return `${names[Number(mo) - 1]} ${y}`;
+    }
+
+    function renderSummary() {
+      const months = state.siteData.months || [];
+      const params = state.siteData.params || {};
+      const title = document.getElementById("summary-title");
+      title.textContent = `Peak shaving by month · N=${params.N}, L=${params.L}`;
+
+      const table = document.getElementById("months-table");
+      if (!months.length) {
+        table.innerHTML = `<tbody><tr><td>No peak shaving results for this site.</td></tr></tbody>`;
+        return;
+      }
+
+      const avg = (key) => months.reduce((s, m) => s + (m[key] || 0), 0) / months.length;
+      const avgPeaks = months.reduce((s, m) => s + (m.peaks || []).length, 0) / months.length;
+
+      let html = `<thead><tr>
+        <th>Month</th>
+        <th>Demand shaved (kW)</th>
+        <th>Demand shaved (%)</th>
+        <th>Energy delivered (kWh)</th>
+        <th>Energy delivered (%)</th>
+        <th>Peaks</th>
+      </tr></thead><tbody>`;
+      for (const m of months) {
+        html += `<tr class="month-row" data-month="${m.month}" title="Show ${monthLabel(m.month)} in the chart">
+          <td>${monthLabel(m.month)}</td>
+          <td>${formatNumber(m.total_demand_shaved_kw)}</td>
+          <td>${formatPct(m.total_demand_shaved_pct)}</td>
+          <td>${formatNumber(m.total_energy_delivered_kwh)}</td>
+          <td>${formatPct(m.total_energy_delivered_pct)}</td>
+          <td>${(m.peaks || []).length}</td>
+        </tr>`;
+      }
+      html += `</tbody><tfoot><tr>
+        <td>Average</td>
+        <td>${formatNumber(avg("total_demand_shaved_kw"))}</td>
+        <td>${formatPct(avg("total_demand_shaved_pct"))}</td>
+        <td>${formatNumber(avg("total_energy_delivered_kwh"))}</td>
+        <td>${formatPct(avg("total_energy_delivered_pct"))}</td>
+        <td>${formatNumber(avgPeaks)}</td>
+      </tr></tfoot>`;
+      table.innerHTML = html;
+    }
+
+    function onManualDatetimeChange() {
+      state.activeSpan = null;
+      clearMonthSelection();
+      updateSpanButtons();
+      updateChart();
+    }
+
+    document.getElementById("start-datetime").addEventListener("change", onManualDatetimeChange);
+    document.getElementById("end-datetime").addEventListener("change", onManualDatetimeChange);
+
+    function updateUnitButtons() {
+      document.querySelectorAll("#unit-buttons .span-btn").forEach((btn) => {
+        btn.classList.toggle("active", btn.dataset.unit === state.unit);
+      });
+    }
+
+    document.getElementById("unit-buttons").addEventListener("click", (e) => {
+      const btn = e.target.closest(".span-btn");
+      if (!btn || btn.dataset.unit === state.unit) return;
+      state.unit = btn.dataset.unit;
+      updateUnitButtons();
+      updateChart();
+    });
+
+    document.getElementById("span-buttons").addEventListener("click", (e) => {
+      const btn = e.target.closest(".span-btn");
+      if (!btn) return;
+      state.activeSpan = btn.dataset.span;
+      clearMonthSelection();
+      updateSpanButtons();
+      const range = computeRange(
+        document.getElementById("end-datetime").value,
+        state.activeSpan,
+        Boolean(siteTimezone()),
+        siteTimezone()
+      );
+      applyRangeToInputs(range);
+      updateChart();
+    });
+
+    function clearMonthSelection() {
+      document.querySelectorAll("#months-table tr.month-row.selected")
+        .forEach((r) => r.classList.remove("selected"));
+    }
+
+    function pad2(n) {
+      return String(n).padStart(2, "0");
+    }
+
+    // A calendar month "YYYY-MM" -> local-time [start, end] inputs. The
+    // analysis labels months in site-local time, matching the chart axis.
+    function monthToRange(month) {
+      const [y, mo] = month.split("-").map(Number);
+      const lastDay = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+      return {
+        startTs: `${y}-${pad2(mo)}-01T00:00:00`,
+        endTs: `${y}-${pad2(mo)}-${pad2(lastDay)}T23:59:00`,
+      };
+    }
+
+    document.getElementById("months-table").addEventListener("click", (e) => {
+      const row = e.target.closest("tr.month-row");
+      if (!row) return;
+      document.querySelectorAll("#months-table tr.month-row").forEach((r) => {
+        r.classList.toggle("selected", r === row);
+      });
+      state.activeSpan = null;
+      updateSpanButtons();
+      applyRangeToInputs(monthToRange(row.dataset.month));
+      updateChart();
+      document.getElementById("chart").scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+
+    function resetControls() {
+      const tz = siteTimezone();
+      const endLocal = tz ? utcToLocalWallTs(DATA_MAX_TS, tz) : DATA_MAX_TS;
+      const range = computeRange(toDatetimeLocalValue(endLocal), "all", Boolean(tz), tz);
+      applyRangeToInputs(range);
+      state.activeSpan = "all";
+      state.unit = "kW";
+      updateSpanButtons();
+      updateUnitButtons();
+    }
+
+    function showLoadError(siteId, message) {
+      loadError.classList.remove("hidden");
+      loadError.innerHTML =
+        `Failed to load data for site <strong>${siteId}</strong>: ${message}.<br><br>` +
+        `If you opened this from a <code>file://</code> path, serve the output over HTTP instead, e.g. ` +
+        `<code>cd output &amp;&amp; python3 -m http.server</code>, then open ` +
+        `<code>http://localhost:8000/report.html</code>.`;
+    }
+
+    // Public entry point: set the header from siteMeta, fetch the site JSON,
+    // reset controls, and render the chart plus monthly summary.
+    async function loadSiteChart(siteMeta, dataUrl) {
+      document.getElementById("site-title").textContent = siteMeta.label;
+      document.getElementById("site-meta").textContent = siteMeta.subtitle;
+      try {
+        const resp = await fetch(dataUrl);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        state.siteData = await resp.json();
+        state.selectedSite = { site_id: siteMeta.site_id, timezone: siteMeta.timezone };
+        chartPanel.classList.remove("hidden");
+        resetControls();
+        renderSummary();
+        updateChart();
+      } catch (err) {
+        showLoadError(siteMeta.site_id, err.message);
+      }
+    }
+
+    async function init() {
+      const params = new URLSearchParams(location.search);
+      const siteId = params.get("site");
+      if (!siteId) {
+        loadError.classList.remove("hidden");
+        loadError.textContent = "No site specified. Open this page via a site link in the report.";
+        return;
+      }
+      document.title = `Site ${siteId} · Peak Shaving`;
+      const dataUrl = `data/sites/${siteId}.json`;
+      try {
+        const resp = await fetch(dataUrl);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const d = await resp.json();
+        state.siteData = d;
+        state.selectedSite = { site_id: siteId, timezone: d.timezone };
+        const meta = d.meta || {};
+        const sqFt = meta.sq_ft != null ? `${meta.sq_ft.toLocaleString()} sq ft` : null;
+        const subtitle = [meta.industry, meta.sub_industry, sqFt, d.timezone]
+          .filter(Boolean)
+          .join(" · ");
+        document.getElementById("site-title").textContent = `Site ${siteId}`;
+        document.getElementById("site-meta").textContent = subtitle;
+        chartPanel.classList.remove("hidden");
+        resetControls();
+        renderSummary();
+        updateChart();
+      } catch (err) {
+        showLoadError(siteId, err.message);
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>

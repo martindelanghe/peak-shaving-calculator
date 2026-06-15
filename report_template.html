@@ -9,7 +9,7 @@
     --border: #e2e8f0;
     --text: #1e293b;
     --muted: #64748b;
-    --accent: #15803d;
+    --accent: #1a73e8;
     --avg-w: 96px;
     --site-w: 78px;
   }
@@ -81,8 +81,16 @@
     width: var(--site-w);
     min-width: var(--site-w);
   }
-  thead th.avg-head {
+  thead th.abs-head {
     left: var(--site-w);
+    z-index: 4;
+    text-align: right;
+    width: var(--avg-w);
+    min-width: var(--avg-w);
+    color: var(--text);
+  }
+  thead th.pct-head {
+    left: calc(var(--site-w) + var(--avg-w));
     z-index: 4;
     text-align: right;
     width: var(--avg-w);
@@ -99,9 +107,17 @@
     text-align: left;
     font-weight: 600;
   }
+  tbody th.site a {
+    color: var(--accent);
+    text-decoration: none;
+    border-bottom: 1px dashed transparent;
+  }
+  tbody th.site a:hover {
+    text-decoration: none;
+    border-bottom-color: var(--accent);
+  }
   tbody td.avg {
     position: sticky;
-    left: var(--site-w);
     z-index: 1;
     width: var(--avg-w);
     min-width: var(--avg-w);
@@ -109,8 +125,13 @@
     text-align: right;
     font-weight: 650;
     color: var(--text);
+  }
+  tbody td.abs { left: var(--site-w); }
+  tbody td.pct {
+    left: calc(var(--site-w) + var(--avg-w));
     border-right: 1px solid var(--border);
   }
+  thead th.pct-head { border-right: 1px solid var(--border); }
   tbody tr:last-child th, tbody tr:last-child td { border-bottom: none; }
   td.empty { color: #cbd5e1; text-align: center; }
   tr.group th {
@@ -158,7 +179,78 @@
     height: 10px;
     border-radius: 5px;
     border: 1px solid var(--border);
-    background: linear-gradient(to right, #ffffff, rgb(21, 128, 61));
+    background: linear-gradient(to right, #ffffff, rgb(26, 115, 232));
+  }
+  .summary-wrap {
+    margin: 0 28px 16px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: #fff;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+    overflow: hidden;
+  }
+  .summary-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 16px;
+    cursor: pointer;
+    user-select: none;
+    font-weight: 650;
+    font-size: 14px;
+    background: #f1f5f9;
+    border-bottom: 1px solid var(--border);
+  }
+  .summary-head:hover { background: #e8eef4; }
+  .summary-wrap.collapsed .summary-head { border-bottom: none; }
+  .summary-wrap.collapsed .summary-body { display: none; }
+  .summary-head .arrow {
+    display: inline-block;
+    width: 14px;
+    font-size: 10px;
+    color: var(--muted);
+  }
+  .summary-head .hint {
+    margin-left: auto;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--muted);
+  }
+  .summary-body { padding: 0 16px 12px; overflow: auto; }
+  table.summary {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12.5px;
+    margin-top: 8px;
+  }
+  table.summary th, table.summary td {
+    padding: 7px 12px;
+    text-align: right;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  table.summary th:first-child, table.summary td:first-child {
+    text-align: left;
+  }
+  table.summary thead th {
+    color: var(--muted);
+    font-weight: 600;
+    border-bottom: 2px solid var(--border);
+  }
+  table.summary tbody tr:last-child td { border-bottom: none; }
+  table.summary tr.industry-row td {
+    font-weight: 650;
+    background: #eef2f6;
+  }
+  table.summary tr.sub-row td:first-child {
+    padding-left: 28px;
+    color: var(--muted);
+    font-weight: 500;
+  }
+  table.summary tfoot td {
+    font-weight: 700;
+    border-top: 2px solid var(--border);
+    background: #f8fafc;
   }
 </style>
 </head>
@@ -182,6 +274,16 @@
     </div>
   </div>
 </header>
+<div class="summary-wrap" id="summary-wrap">
+  <div class="summary-head" id="summary-toggle">
+    <span class="arrow" id="summary-arrow">&#9660;</span>
+    Industry summary
+    <span class="hint">Avg demand shaved per site · mean &amp; std dev</span>
+  </div>
+  <div class="summary-body">
+    <table class="summary" id="summary-table"></table>
+  </div>
+</div>
 <div class="table-wrap">
   <table id="matrix"></table>
 </div>
@@ -208,6 +310,17 @@ const METRICS = {
 };
 let metric = "demand";
 
+// The two summary columns track the metric family (demand vs energy): an
+// absolute average and a percentage average that stay fixed when toggling
+// between the absolute and percentage view of the same family.
+const FAMILY = {
+  demand: { abs: "demand", pct: "demandPct" },
+  energy: { abs: "energy", pct: "energyPct" },
+};
+function familyOf(m) {
+  return (m === "demand" || m === "demandPct") ? "demand" : "energy";
+}
+
 // lookup[customer][month] = month record
 const lookup = {};
 for (const id of customers) {
@@ -220,6 +333,115 @@ function subIndustryOf(id) {
   const m = META[id];
   return (m && m.sub_industry) ? m.sub_industry : "Unknown";
 }
+function industryOf(id) {
+  const m = META[id];
+  return (m && m.industry) ? m.industry : "Unknown";
+}
+
+function mean(arr) {
+  if (!arr.length) return null;
+  return arr.reduce((s, x) => s + x, 0) / arr.length;
+}
+function stddev(arr) {
+  if (arr.length < 2) return 0;
+  const m = mean(arr);
+  return Math.sqrt(arr.reduce((s, x) => s + (x - m) ** 2, 0) / arr.length);
+}
+
+function statsForIds(ids) {
+  const kw = [];
+  const pct = [];
+  for (const id of ids) {
+    const k = avgOf(id, METRICS.demand.key);
+    const p = avgOf(id, METRICS.demandPct.key);
+    if (k !== null) kw.push(k);
+    if (p !== null) pct.push(p);
+  }
+  return {
+    n: kw.length,
+    avgKw: mean(kw),
+    stdKw: stddev(kw),
+    avgPct: mean(pct),
+    stdPct: stddev(pct),
+  };
+}
+
+function summaryStats() {
+  const tree = new Map();
+  for (const id of customers) {
+    const ind = industryOf(id);
+    const sub = subIndustryOf(id);
+    if (!tree.has(ind)) tree.set(ind, new Map());
+    const subs = tree.get(ind);
+    if (!subs.has(sub)) subs.set(sub, []);
+    subs.get(sub).push(id);
+  }
+  return [...tree.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([industry, subs]) => {
+      const allIds = [...subs.values()].flat();
+      return {
+        name: industry,
+        ...statsForIds(allIds),
+        subs: [...subs.entries()]
+          .sort((a, b) => a[0].localeCompare(b[0]))
+          .map(([name, ids]) => ({ name, ...statsForIds(ids) }))
+          .filter((s) => s.n > 0),
+      };
+    })
+    .filter((g) => g.n > 0);
+}
+
+let summaryCollapsed = false;
+
+function summaryRow(label, s, cls) {
+  return `<tr class="${cls}"><td>${label}</td><td>${s.n}</td>`
+    + `<td>${fmtNum(s.avgKw, false)}</td><td>${fmtNum(s.stdKw, false)}</td>`
+    + `<td>${fmtNum(s.avgPct, true)}</td><td>${fmtNum(s.stdPct, true)}</td></tr>`;
+}
+
+function renderSummary() {
+  const groups = summaryStats();
+  const siteKw = [];
+  const sitePct = [];
+  for (const id of customers) {
+    const kw = avgOf(id, METRICS.demand.key);
+    const pct = avgOf(id, METRICS.demandPct.key);
+    if (kw !== null) siteKw.push(kw);
+    if (pct !== null) sitePct.push(pct);
+  }
+
+  let html = `<thead><tr>
+    <th>Industry / Sub-industry</th>
+    <th>Sites</th>
+    <th>Avg kW saved</th>
+    <th>Std dev kW</th>
+    <th>Avg % saved</th>
+    <th>Std dev %</th>
+  </tr></thead><tbody>`;
+  for (const g of groups) {
+    html += summaryRow(g.name, g, "industry-row");
+    for (const s of g.subs) {
+      html += summaryRow(s.name, s, "sub-row");
+    }
+  }
+  html += `</tbody><tfoot><tr>
+    <td>All industries</td>
+    <td>${siteKw.length}</td>
+    <td>${fmtNum(mean(siteKw), false)}</td>
+    <td>${fmtNum(stddev(siteKw), false)}</td>
+    <td>${fmtNum(mean(sitePct), true)}</td>
+    <td>${fmtNum(stddev(sitePct), true)}</td>
+  </tr></tfoot>`;
+  document.getElementById("summary-table").innerHTML = html;
+  document.getElementById("summary-wrap").classList.toggle("collapsed", summaryCollapsed);
+  document.getElementById("summary-arrow").textContent = summaryCollapsed ? "\u25B6" : "\u25BC";
+}
+
+document.getElementById("summary-toggle").addEventListener("click", () => {
+  summaryCollapsed = !summaryCollapsed;
+  renderSummary();
+});
 
 // Group customers by sub-industry, groups sorted alphabetically; customer
 // order within a group preserves the numeric sort from above.
@@ -237,19 +459,27 @@ const groups = (() => {
 
 const collapsed = new Set();
 
-const GREEN = [21, 128, 61];
+const ACCENT = [26, 115, 232];
 function cellColor(v, max) {
   if (max <= 0) return "#ffffff";
   const t = Math.max(0, Math.min(1, v / max));
-  const c = GREEN.map(g => Math.round(255 + (g - 255) * t));
+  const c = ACCENT.map(g => Math.round(255 + (g - 255) * t));
   return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
 }
 
-function fmt(v) {
-  if (METRICS[metric].pct) {
+function fmtNum(v, pct) {
+  if (pct) {
     return v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + "%";
   }
   return v.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+}
+function fmt(v) {
+  return fmtNum(v, METRICS[metric].pct);
+}
+function avgOf(id, metricKey) {
+  const present = months.map(m => lookup[id][m]).filter(Boolean);
+  if (!present.length) return null;
+  return present.reduce((s, rec) => s + rec[metricKey], 0) / present.length;
 }
 
 function monthLabel(m) {
@@ -268,11 +498,14 @@ function render() {
     }
   }
 
-  const unit = METRICS[metric].unit;
-  const totalCols = months.length + 2;
+  const fam = FAMILY[familyOf(metric)];
+  const absKey = METRICS[fam.abs].key;
+  const pctKey = METRICS[fam.pct].key;
+  const totalCols = months.length + 3;
   let html = "<thead><tr>"
     + `<th class="site-head">Customer</th>`
-    + `<th class="avg-head">Avg ${unit}</th>`;
+    + `<th class="abs-head">Avg ${METRICS[fam.abs].unit}</th>`
+    + `<th class="pct-head">Avg %</th>`;
   for (const m of months) html += `<th>${monthLabel(m)}</th>`;
   html += "</tr></thead><tbody>";
   for (const g of groups) {
@@ -283,14 +516,16 @@ function render() {
       + `<span class="count">${g.ids.length}</span></span></th></tr>`;
     if (isCollapsed) continue;
     for (const id of g.ids) {
-      const present = months.map(m => lookup[id][m]).filter(Boolean);
-      const avg = present.length
-        ? present.reduce((s, rec) => s + rec[key], 0) / present.length
-        : null;
-      const avgCell = avg === null
-        ? `<td class="avg empty">&ndash;</td>`
-        : `<td class="avg">${fmt(avg)}</td>`;
-      html += `<tr><th class="site">${id}</th>${avgCell}`;
+      const avgAbs = avgOf(id, absKey);
+      const avgPct = avgOf(id, pctKey);
+      const absCell = avgAbs === null
+        ? `<td class="avg abs empty">&ndash;</td>`
+        : `<td class="avg abs">${fmtNum(avgAbs, false)}</td>`;
+      const pctCell = avgPct === null
+        ? `<td class="avg pct empty">&ndash;</td>`
+        : `<td class="avg pct">${fmtNum(avgPct, true)}</td>`;
+      const siteLink = `<a href="site_chart.html?site=${encodeURIComponent(id)}" target="_blank" rel="noopener" title="Open time-series chart for site ${id}">${id}</a>`;
+      html += `<tr><th class="site">${siteLink}</th>${absCell}${pctCell}`;
       for (const m of months) {
         const rec = lookup[id][m];
         if (rec) {
@@ -308,7 +543,7 @@ function render() {
   html += "</tbody>";
   document.getElementById("matrix").innerHTML = html;
   document.getElementById("subtitle").textContent =
-    `${METRICS[metric].label} per customer per month · N=${DATA.params.N}, L=${DATA.params.L} · ${customers.length} customers · ${groups.length} sub-industries`;
+    `${METRICS[metric].label} per customer per month · N=${DATA.params.N}, L=${DATA.params.L} · ${customers.length} customers · ${groups.length} sub-industries · click a customer ID to open its time-series chart`;
   document.querySelectorAll("[data-metric]").forEach(btn => {
     btn.classList.toggle("active", btn.dataset.metric === metric);
   });
@@ -334,6 +569,7 @@ document.getElementById("btn-collapse").addEventListener("click", () => {
 });
 
 render();
+renderSummary();
 </script>
 </body>
 </html>

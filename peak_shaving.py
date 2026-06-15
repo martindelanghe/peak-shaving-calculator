@@ -9,6 +9,7 @@ a JSON results file plus a self-contained HTML heatmap report.
 
 import argparse
 import json
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -16,38 +17,73 @@ import pandas as pd
 
 INTERVAL = pd.Timedelta(minutes=15)
 TIME_FMT = "%Y-%m-%d %H:%M"
+TS_FMT = "%Y-%m-%dT%H:%M:%S"
 
 
 def load_site_meta(meta_path: Path) -> dict:
-    """Map each site ID to its timezone, industry, and sub-industry."""
+    """Map each site ID to its timezone, industry, sub-industry, and area."""
     meta = pd.read_csv(meta_path)
     out = {}
     for _, row in meta.iterrows():
+        sq_ft = row.get("SQ_FT")
         out[str(row["SITE_ID"])] = {
             "time_zone": row["TIME_ZONE"],
             "industry": row["INDUSTRY"],
             "sub_industry": row["SUB_INDUSTRY"],
+            "sq_ft": None if pd.isna(sq_ft) else int(sq_ft),
         }
     return out
 
 
-def load_series(csv_path: Path, tz: str) -> pd.Series:
-    """Load a site CSV as a 5-minute series in local time, anomalies as NaN."""
+def load_raw(csv_path: Path) -> pd.DataFrame:
+    """Load a site CSV as a UTC-indexed 5-minute frame.
+
+    Returns a frame with `value` (anomalies set to NaN) and `estimated`
+    (boolean) columns, sorted and de-duplicated on the timestamp index.
+    """
     df = pd.read_csv(csv_path, dtype={"anomaly": str})
     values = df["value"].astype(float)
     anomaly = df["anomaly"].fillna("").str.strip() != ""
     values = values.mask(anomaly)
+    estimated = pd.to_numeric(df["estimated"], errors="coerce").fillna(0) > 0
     idx = pd.to_datetime(df["dttm_utc"], utc=True)
-    s = pd.Series(values.to_numpy(), index=idx).sort_index()
-    s = s[~s.index.duplicated(keep="first")]
-    s.index = s.index.tz_convert(tz)
-    return s
+    out = pd.DataFrame(
+        {"value": values.to_numpy(), "estimated": estimated.to_numpy()},
+        index=idx,
+    ).sort_index()
+    out = out[~out.index.duplicated(keep="first")]
+    return out
 
 
-def resample_15min(s: pd.Series) -> pd.Series:
-    # A bin is valid only when all three 5-minute readings are present and
-    # non-NaN; min_count makes incomplete or gappy bins NaN.
+def local_series_15min(raw: pd.DataFrame, tz: str) -> pd.Series:
+    """5-minute UTC readings → 15-minute local-time energy series.
+
+    A bin is valid only when all three 5-minute readings are present and
+    non-NaN; min_count makes incomplete or gappy bins NaN.
+    """
+    s = pd.Series(raw["value"].to_numpy(), index=raw.index).tz_convert(tz)
     return s.resample("15min").sum(min_count=3)
+
+
+def build_timeseries(raw: pd.DataFrame) -> list:
+    """Build the UTC-stored 15-minute chart series from raw 5-minute readings.
+
+    Returns a list of `[ts, kWh, estimated]` at 15-minute intervals.
+    Timestamps are UTC strings `YYYY-MM-DDTHH:mm:ss` (no `Z` suffix). Bins
+    that are incomplete (missing 5-minute readings) are dropped.
+    """
+    value = pd.Series(raw["value"].to_numpy(), index=raw.index)
+    estimated = pd.Series(
+        raw["estimated"].astype(int).to_numpy(), index=raw.index
+    )
+    r15 = value.resample("15min").sum(min_count=3)
+    est15 = estimated.resample("15min").max()
+
+    return [
+        [ts.strftime(TS_FMT), round(float(v), 4), bool(est15.loc[ts])]
+        for ts, v in r15.items()
+        if pd.notna(v)
+    ]
 
 
 def analyze_month(e: np.ndarray, index: pd.DatetimeIndex, N: int, L: int):
@@ -142,8 +178,8 @@ def analyze_month(e: np.ndarray, index: pd.DatetimeIndex, N: int, L: int):
     }
 
 
-def process_customer(csv_path: Path, tz: str, N: int, L: int) -> list:
-    s = resample_15min(load_series(csv_path, tz))
+def process_customer(raw: pd.DataFrame, tz: str, N: int, L: int) -> list:
+    s = local_series_15min(raw, tz)
     # Drop a leading partial month (e.g. the Dec 2011 spillover created by
     # converting UTC-aligned 2012 data to local time).
     if len(s):
@@ -166,6 +202,35 @@ def build_report(template_path: Path, results: dict, out_path: Path) -> None:
     out_path.write_text(html)
 
 
+def write_site_chart_data(
+    out_dir: Path,
+    site_id: str,
+    raw: pd.DataFrame,
+    info: dict,
+    months: list,
+    params: dict,
+) -> None:
+    """Write a self-contained per-site JSON consumed by the chart tab."""
+    readings = build_timeseries(raw)
+    payload = {
+        "site_id": site_id,
+        "unit": "kWh",
+        "interval_minutes": 15,
+        "timezone": info.get("time_zone", "UTC"),
+        "params": params,
+        "meta": {
+            "industry": info.get("industry", "Unknown"),
+            "sub_industry": info.get("sub_industry", "Unknown"),
+            "sq_ft": info.get("sq_ft"),
+        },
+        "months": months,
+        "readings": readings,
+    }
+    sites_dir = out_dir / "data" / "sites"
+    sites_dir.mkdir(parents=True, exist_ok=True)
+    (sites_dir / f"{site_id}.json").write_text(json.dumps(payload))
+
+
 def site_sort_key(path: Path):
     return (0, int(path.stem)) if path.stem.isdigit() else (1, path.stem)
 
@@ -184,6 +249,8 @@ def main():
                     help="Output directory for results.json and report.html")
     ap.add_argument("--sites", nargs="*", default=None,
                     help="Optional subset of site IDs to process")
+    ap.add_argument("--no-site-charts", action="store_true",
+                    help="Skip writing per-site time-series JSON for the charts")
     args = ap.parse_args()
 
     site_meta = load_site_meta(args.meta)
@@ -197,28 +264,36 @@ def main():
         "customers": {},
         "meta": {},
     }
+    params = {"N": args.num_peaks, "L": args.max_window}
+    args.out.mkdir(parents=True, exist_ok=True)
     for csv_path in csv_files:
         site_id = csv_path.stem
         info = site_meta.get(site_id, {})
         tz = info.get("time_zone", "UTC")
-        results["customers"][site_id] = process_customer(
-            csv_path, tz, args.num_peaks, args.max_window
-        )
+        raw = load_raw(csv_path)
+        months = process_customer(raw, tz, args.num_peaks, args.max_window)
+        results["customers"][site_id] = months
         results["meta"][site_id] = {
             "industry": info.get("industry", "Unknown"),
             "sub_industry": info.get("sub_industry", "Unknown"),
+            "sq_ft": info.get("sq_ft"),
         }
+        if not args.no_site_charts:
+            write_site_chart_data(args.out, site_id, raw, info, months, params)
         print(f"processed site {site_id} ({tz})")
 
-    args.out.mkdir(parents=True, exist_ok=True)
     json_path = args.out / "results.json"
     json_path.write_text(json.dumps(results, indent=2))
     print(f"wrote {json_path}")
 
-    template_path = Path(__file__).parent / "report_template.html"
+    src_dir = Path(__file__).parent
     report_path = args.out / "report.html"
-    build_report(template_path, results, report_path)
+    build_report(src_dir / "report_template.html", results, report_path)
     print(f"wrote {report_path}")
+
+    chart_dst = args.out / "site_chart.html"
+    shutil.copyfile(src_dir / "site_chart_template.html", chart_dst)
+    print(f"wrote {chart_dst}")
 
 
 if __name__ == "__main__":

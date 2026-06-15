@@ -22,14 +22,49 @@ python3 -m venv .venv
 ```
 
 All arguments are optional; the values above are the defaults. Use
-`--sites 8 14` to process a subset of site IDs.
+`--sites 8 14` to process a subset of site IDs. Pass `--no-site-charts` to
+skip writing the per-site time-series JSON (faster; disables the detail
+charts).
 
 Outputs:
 
 - `output/results.json` — full results (parameters, per-customer monthly
   records with shaved peak windows)
-- `output/report.html` — open directly in a browser; customers x months
-  heatmap with a toggle between demand shaved (kW) and energy delivered (kWh)
+- `output/report.html` — customers x months heatmap with a toggle between
+  demand shaved (kW) and energy delivered (kWh)
+- `output/site_chart.html` — single-site detail page (time-series chart plus
+  monthly peak-shaving summary), opened from the report
+- `output/data/sites/{id}.json` — per-site 15-minute time series and monthly
+  results consumed by the detail page
+
+## Single-site detail charts
+
+Each customer ID in `report.html` is a link that opens `site_chart.html` in a
+new tab for that site. The detail page shows:
+
+- A Plotly line chart of consumption over time at 15-minute resolution, with
+  start/end range controls and span presets (All, 1 year, 1 month, 1 week, 3
+  days, 1 day, 1 hour). Times are always shown in the site's local timezone.
+  A range slider under the x-axis acts as a horizontal scroller: it shows the
+  full loaded range as an overview and lets you drag/resize a window to scroll
+  across it. Zooming/panning syncs back to the range inputs.
+- A units toggle (kW / kWh). The chart defaults to average demand in **kW**
+  (interval energy x 4, since a 15-minute interval is a quarter hour); switch
+  to **kWh** to see the raw interval energy.
+- Shaved peak windows are flagged as shaded bands on the chart: green for a
+  standalone window and orange (dashed) for a window that is adjacent to
+  (immediately follows) another shaved window.
+- Summary stats for the visible range (total kWh, peak interval kWh, avg daily
+  kWh).
+- A month-by-month peak-shaving table with an averages row.
+
+The detail page loads its data with `fetch()`, so the output must be served
+over HTTP (not opened via `file://`):
+
+```bash
+cd output && python3 -m http.server
+# then open http://localhost:8000/report.html
+```
 
 ## Parameters
 
