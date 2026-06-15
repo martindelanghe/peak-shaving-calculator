@@ -18,9 +18,17 @@ INTERVAL = pd.Timedelta(minutes=15)
 TIME_FMT = "%Y-%m-%d %H:%M"
 
 
-def load_site_timezones(meta_path: Path) -> dict:
+def load_site_meta(meta_path: Path) -> dict:
+    """Map each site ID to its timezone, industry, and sub-industry."""
     meta = pd.read_csv(meta_path)
-    return dict(zip(meta["SITE_ID"].astype(str), meta["TIME_ZONE"]))
+    out = {}
+    for _, row in meta.iterrows():
+        out[str(row["SITE_ID"])] = {
+            "time_zone": row["TIME_ZONE"],
+            "industry": row["INDUSTRY"],
+            "sub_industry": row["SUB_INDUSTRY"],
+        }
+    return out
 
 
 def load_series(csv_path: Path, tz: str) -> pd.Series:
@@ -117,11 +125,19 @@ def analyze_month(e: np.ndarray, index: pd.DatetimeIndex, N: int, L: int):
             }
         )
 
-    demand_shaved = (float(np.nanmax(e)) - floor) * 4.0  # kWh/15min -> kW
+    peak = float(np.nanmax(e))
+    demand_shaved = (peak - floor) * 4.0  # kWh/15min -> kW
+    # Demand shaved relative to the month's peak demand; the 4x factors cancel.
+    demand_pct = (peak - floor) / peak * 100.0 if peak > 0 else 0.0
+    # Energy delivered relative to the month's total energy (valid intervals).
+    month_energy = float(np.nansum(e))
+    energy_pct = total_delivered / month_energy * 100.0 if month_energy > 0 else 0.0
     return {
         "month": index[0].strftime("%Y-%m"),
         "total_demand_shaved_kw": round(demand_shaved, 3),
         "total_energy_delivered_kwh": round(total_delivered, 3),
+        "total_demand_shaved_pct": round(demand_pct, 4),
+        "total_energy_delivered_pct": round(energy_pct, 4),
         "peaks": peaks_out,
     }
 
@@ -160,9 +176,9 @@ def main():
                     help="Directory with per-site 5-minute CSVs")
     ap.add_argument("--meta", default="csv-only/meta/all_sites.csv", type=Path,
                     help="Site metadata CSV (for TIME_ZONE)")
-    ap.add_argument("-N", "--num-peaks", default=5, type=int,
+    ap.add_argument("-N", "--num-peaks", default=3, type=int,
                     help="Number of peaks to shave per month")
-    ap.add_argument("-L", "--max-window", default=8, type=int,
+    ap.add_argument("-L", "--max-window", default=3, type=int,
                     help="Maximum shaving window length in 15-minute periods")
     ap.add_argument("--out", default="output", type=Path,
                     help="Output directory for results.json and report.html")
@@ -170,7 +186,7 @@ def main():
                     help="Optional subset of site IDs to process")
     args = ap.parse_args()
 
-    timezones = load_site_timezones(args.meta)
+    site_meta = load_site_meta(args.meta)
     csv_files = sorted(args.csv_dir.glob("*.csv"), key=site_sort_key)
     if args.sites:
         wanted = set(args.sites)
@@ -179,13 +195,19 @@ def main():
     results = {
         "params": {"N": args.num_peaks, "L": args.max_window},
         "customers": {},
+        "meta": {},
     }
     for csv_path in csv_files:
         site_id = csv_path.stem
-        tz = timezones.get(site_id, "UTC")
+        info = site_meta.get(site_id, {})
+        tz = info.get("time_zone", "UTC")
         results["customers"][site_id] = process_customer(
             csv_path, tz, args.num_peaks, args.max_window
         )
+        results["meta"][site_id] = {
+            "industry": info.get("industry", "Unknown"),
+            "sub_industry": info.get("sub_industry", "Unknown"),
+        }
         print(f"processed site {site_id} ({tz})")
 
     args.out.mkdir(parents=True, exist_ok=True)

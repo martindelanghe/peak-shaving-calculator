@@ -10,6 +10,8 @@
     --text: #1e293b;
     --muted: #64748b;
     --accent: #15803d;
+    --avg-w: 96px;
+    --site-w: 78px;
   }
   * { box-sizing: border-box; }
   body {
@@ -72,17 +74,78 @@
     font-weight: 600;
     color: var(--muted);
   }
-  tbody th {
+  thead th.site-head {
+    left: 0;
+    z-index: 4;
+    text-align: left;
+    width: var(--site-w);
+    min-width: var(--site-w);
+  }
+  thead th.avg-head {
+    left: var(--site-w);
+    z-index: 4;
+    text-align: right;
+    width: var(--avg-w);
+    min-width: var(--avg-w);
+    color: var(--text);
+  }
+  tbody th.site {
     position: sticky;
     left: 0;
     z-index: 1;
+    width: var(--site-w);
+    min-width: var(--site-w);
     background: #f1f5f9;
     text-align: left;
     font-weight: 600;
   }
-  thead th:first-child { left: 0; z-index: 3; text-align: left; }
+  tbody td.avg {
+    position: sticky;
+    left: var(--site-w);
+    z-index: 1;
+    width: var(--avg-w);
+    min-width: var(--avg-w);
+    background: #eef2f6;
+    text-align: right;
+    font-weight: 650;
+    color: var(--text);
+    border-right: 1px solid var(--border);
+  }
   tbody tr:last-child th, tbody tr:last-child td { border-bottom: none; }
   td.empty { color: #cbd5e1; text-align: center; }
+  tr.group th {
+    background: #e2ebf3;
+    text-align: left;
+    font-weight: 650;
+    color: var(--text);
+    cursor: pointer;
+    user-select: none;
+    border-top: 1px solid #cbd5e1;
+  }
+  tr.group th:hover { background: #d7e2ec; }
+  tr.group .group-label {
+    position: sticky;
+    left: 12px;
+    display: inline-flex;
+    align-items: center;
+  }
+  tr.group .arrow {
+    display: inline-block;
+    width: 14px;
+    font-size: 10px;
+    color: var(--muted);
+  }
+  tr.group .count {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 1px 7px;
+    border-radius: 9px;
+    background: #fff;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 600;
+  }
   .legend {
     display: inline-flex;
     align-items: center;
@@ -108,8 +171,14 @@
   <div style="display:flex; align-items:center; gap:16px;">
     <span class="legend">low <span class="bar"></span> high</span>
     <div class="toggle">
-      <button id="btn-demand" class="active">Demand shaved (kW)</button>
-      <button id="btn-energy">Energy delivered (kWh)</button>
+      <button id="btn-expand">Expand all</button>
+      <button id="btn-collapse">Collapse all</button>
+    </div>
+    <div class="toggle">
+      <button data-metric="demand" class="active">Demand shaved (kW)</button>
+      <button data-metric="demandPct">Demand shaved (%)</button>
+      <button data-metric="energy">Energy delivered (kWh)</button>
+      <button data-metric="energyPct">Energy delivered (%)</button>
     </div>
   </div>
 </header>
@@ -132,8 +201,10 @@ for (const id of customers) {
 const months = [...monthSet].sort();
 
 const METRICS = {
-  demand: { key: "total_demand_shaved_kw", label: "Demand shaved (kW)" },
-  energy: { key: "total_energy_delivered_kwh", label: "Energy delivered (kWh)" },
+  demand: { key: "total_demand_shaved_kw", label: "Demand shaved (kW)", unit: "kW", pct: false },
+  demandPct: { key: "total_demand_shaved_pct", label: "Demand shaved (%)", unit: "%", pct: true },
+  energy: { key: "total_energy_delivered_kwh", label: "Energy delivered (kWh)", unit: "kWh", pct: false },
+  energyPct: { key: "total_energy_delivered_pct", label: "Energy delivered (%)", unit: "%", pct: true },
 };
 let metric = "demand";
 
@@ -144,6 +215,28 @@ for (const id of customers) {
   for (const m of DATA.customers[id]) lookup[id][m.month] = m;
 }
 
+const META = DATA.meta || {};
+function subIndustryOf(id) {
+  const m = META[id];
+  return (m && m.sub_industry) ? m.sub_industry : "Unknown";
+}
+
+// Group customers by sub-industry, groups sorted alphabetically; customer
+// order within a group preserves the numeric sort from above.
+const groups = (() => {
+  const byName = new Map();
+  for (const id of customers) {
+    const name = subIndustryOf(id);
+    if (!byName.has(name)) byName.set(name, []);
+    byName.get(name).push(id);
+  }
+  return [...byName.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([name, ids]) => ({ name, ids }));
+})();
+
+const collapsed = new Set();
+
 const GREEN = [21, 128, 61];
 function cellColor(v, max) {
   if (max <= 0) return "#ffffff";
@@ -153,6 +246,9 @@ function cellColor(v, max) {
 }
 
 function fmt(v) {
+  if (METRICS[metric].pct) {
+    return v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + "%";
+  }
   return v.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 }
 
@@ -172,34 +268,71 @@ function render() {
     }
   }
 
-  let html = "<thead><tr><th>Customer</th>";
+  const unit = METRICS[metric].unit;
+  const totalCols = months.length + 2;
+  let html = "<thead><tr>"
+    + `<th class="site-head">Customer</th>`
+    + `<th class="avg-head">Avg ${unit}</th>`;
   for (const m of months) html += `<th>${monthLabel(m)}</th>`;
   html += "</tr></thead><tbody>";
-  for (const id of customers) {
-    html += `<tr><th>${id}</th>`;
-    for (const m of months) {
-      const rec = lookup[id][m];
-      if (rec) {
-        const v = rec[key];
-        const t = max > 0 ? v / max : 0;
-        const fg = t > 0.6 ? "#ffffff" : "var(--text)";
-        html += `<td style="background:${cellColor(v, max)}; color:${fg}">${fmt(v)}</td>`;
-      } else {
-        html += `<td class="empty">&ndash;</td>`;
+  for (const g of groups) {
+    const isCollapsed = collapsed.has(g.name);
+    const arrow = isCollapsed ? "\u25B6" : "\u25BC";
+    html += `<tr class="group${isCollapsed ? " collapsed" : ""}" data-group="${encodeURIComponent(g.name)}">`
+      + `<th colspan="${totalCols}"><span class="group-label"><span class="arrow">${arrow}</span>${g.name}`
+      + `<span class="count">${g.ids.length}</span></span></th></tr>`;
+    if (isCollapsed) continue;
+    for (const id of g.ids) {
+      const present = months.map(m => lookup[id][m]).filter(Boolean);
+      const avg = present.length
+        ? present.reduce((s, rec) => s + rec[key], 0) / present.length
+        : null;
+      const avgCell = avg === null
+        ? `<td class="avg empty">&ndash;</td>`
+        : `<td class="avg">${fmt(avg)}</td>`;
+      html += `<tr><th class="site">${id}</th>${avgCell}`;
+      for (const m of months) {
+        const rec = lookup[id][m];
+        if (rec) {
+          const v = rec[key];
+          const t = max > 0 ? v / max : 0;
+          const fg = t > 0.6 ? "#ffffff" : "var(--text)";
+          html += `<td style="background:${cellColor(v, max)}; color:${fg}">${fmt(v)}</td>`;
+        } else {
+          html += `<td class="empty">&ndash;</td>`;
+        }
       }
+      html += "</tr>";
     }
-    html += "</tr>";
   }
   html += "</tbody>";
   document.getElementById("matrix").innerHTML = html;
   document.getElementById("subtitle").textContent =
-    `${METRICS[metric].label} per customer per month · N=${DATA.params.N}, L=${DATA.params.L} · ${customers.length} customers`;
-  document.getElementById("btn-demand").classList.toggle("active", metric === "demand");
-  document.getElementById("btn-energy").classList.toggle("active", metric === "energy");
+    `${METRICS[metric].label} per customer per month · N=${DATA.params.N}, L=${DATA.params.L} · ${customers.length} customers · ${groups.length} sub-industries`;
+  document.querySelectorAll("[data-metric]").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.metric === metric);
+  });
 }
 
-document.getElementById("btn-demand").addEventListener("click", () => { metric = "demand"; render(); });
-document.getElementById("btn-energy").addEventListener("click", () => { metric = "energy"; render(); });
+document.querySelectorAll("[data-metric]").forEach(btn => {
+  btn.addEventListener("click", () => { metric = btn.dataset.metric; render(); });
+});
+
+document.getElementById("matrix").addEventListener("click", (e) => {
+  const row = e.target.closest("tr.group");
+  if (!row) return;
+  const name = decodeURIComponent(row.dataset.group);
+  if (collapsed.has(name)) collapsed.delete(name);
+  else collapsed.add(name);
+  render();
+});
+
+document.getElementById("btn-expand").addEventListener("click", () => { collapsed.clear(); render(); });
+document.getElementById("btn-collapse").addEventListener("click", () => {
+  for (const g of groups) collapsed.add(g.name);
+  render();
+});
+
 render();
 </script>
 </body>
