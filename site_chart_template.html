@@ -220,6 +220,12 @@
             <button type="button" class="span-btn" data-unit="kWh">kWh</button>
           </div>
         </div>
+        <div class="control-group hidden" id="temperature-control">
+          <label class="toggle-label" for="temperature-overlay">
+            <input type="checkbox" id="temperature-overlay" checked>
+            Temperature overlay
+          </label>
+        </div>
       </div>
 
       <div class="stats" id="stats"></div>
@@ -244,12 +250,17 @@
       siteData: null,
       activeSpan: "all",
       unit: "kW",
+      showTemperature: true,
+      chartPlotted: false,
       syncingFromChart: false,
     };
+
+    const TEMP_DISPLAY_MAX_POINTS = 4000;
 
     // A 15-minute interval is a quarter hour, so average demand (kW) is the
     // interval energy (kWh) times 4. Energy stays as kWh.
     const INTERVALS_PER_HOUR = 4;
+    const GL_THRESHOLD = 4000;
     function unitFactor() {
       return state.unit === "kW" ? INTERVALS_PER_HOUR : 1;
     }
@@ -335,13 +346,42 @@
       return tz ? utcToLocalWallTs(utcTs, tz) : utcTs;
     }
 
-    function computeRange(endInput, span, tzAdjust, timeZone) {
-      const endNorm = normalizeDatetimeInput(endInput);
+    function spanDurationMs(span, anchorMs) {
+      if (span === "hour") return 3600000;
+      const anchorD = new Date(anchorMs);
+      const startD = new Date(anchorMs);
+      switch (span) {
+        case "year":
+          startD.setUTCFullYear(startD.getUTCFullYear() - 1);
+          break;
+        case "month":
+          startD.setUTCMonth(startD.getUTCMonth() - 1);
+          break;
+        case "week":
+          startD.setUTCDate(startD.getUTCDate() - 7);
+          break;
+        case "3days":
+          startD.setUTCDate(startD.getUTCDate() - 3);
+          break;
+        case "day":
+          startD.setUTCDate(startD.getUTCDate() - 1);
+          break;
+      }
+      return anchorD.getTime() - startD.getTime();
+    }
+
+    function wallInputToUtcMs(input, tzAdjust, timeZone) {
+      const norm = normalizeDatetimeInput(input);
+      return tzAdjust && timeZone
+        ? parseUtcTs(localWallToUtcTs(norm, timeZone))
+        : parseUtcTs(norm);
+    }
+
+    function computeRange(startInput, endInput, span, tzAdjust, timeZone) {
       const minMs = parseUtcTs(DATA_MIN_TS);
+      const maxMs = parseUtcTs(DATA_MAX_TS);
 
       if (span === "all") {
-        // "All" always spans the full dataset, regardless of the current End
-        // (which may have moved after a month click or zoom).
         const startTs = tzAdjust && timeZone
           ? utcToLocalWallTs(DATA_MIN_TS, timeZone)
           : DATA_MIN_TS;
@@ -351,40 +391,32 @@
         return { startTs, endTs };
       }
 
-      const endMs = tzAdjust && timeZone
-        ? parseUtcTs(localWallToUtcTs(endNorm, timeZone))
-        : parseUtcTs(endNorm);
+      const startMs = wallInputToUtcMs(startInput, tzAdjust, timeZone);
+      const endMs = wallInputToUtcMs(endInput, tzAdjust, timeZone);
+      const centerMs = (startMs + endMs) / 2;
+      const durationMs = spanDurationMs(span, centerMs);
+      const half = durationMs / 2;
 
-      let startMs;
-      if (span === "hour") {
-        startMs = Math.max(minMs, endMs - 3600000);
-      } else {
-        const startD = new Date(endMs);
-        switch (span) {
-          case "year":
-            startD.setUTCFullYear(startD.getUTCFullYear() - 1);
-            break;
-          case "month":
-            startD.setUTCMonth(startD.getUTCMonth() - 1);
-            break;
-          case "week":
-            startD.setUTCDate(startD.getUTCDate() - 7);
-            break;
-          case "3days":
-            startD.setUTCDate(startD.getUTCDate() - 3);
-            break;
-          case "day":
-            startD.setUTCDate(startD.getUTCDate() - 1);
-            break;
-        }
-        startMs = Math.max(minMs, startD.getTime());
+      let newStartMs = centerMs - half;
+      let newEndMs = centerMs + half;
+
+      if (newStartMs < minMs) {
+        newEndMs += minMs - newStartMs;
+        newStartMs = minMs;
       }
+      if (newEndMs > maxMs) {
+        newStartMs -= newEndMs - maxMs;
+        newEndMs = maxMs;
+      }
+      if (newStartMs < minMs) newStartMs = minMs;
 
-      let startTs = formatUtcTs(startMs);
+      let startTs = formatUtcTs(newStartMs);
+      let endTs = formatUtcTs(newEndMs);
       if (tzAdjust && timeZone) {
         startTs = utcToLocalWallTs(startTs, timeZone);
+        endTs = utcToLocalWallTs(endTs, timeZone);
       }
-      return { startTs, endTs: endNorm };
+      return { startTs, endTs };
     }
 
     function applyRangeToInputs(range) {
@@ -394,6 +426,27 @@
 
     function filterByDate(data, startTs, endTs) {
       return data.filter(([ts]) => ts >= startTs && ts <= endTs);
+    }
+
+    function hasTemperatureData() {
+      return Boolean(state.siteData?.temperatures?.length);
+    }
+
+    function updateTemperatureControl() {
+      const el = document.getElementById("temperature-control");
+      const cb = document.getElementById("temperature-overlay");
+      if (!hasTemperatureData()) {
+        el.classList.add("hidden");
+        return;
+      }
+      el.classList.remove("hidden");
+      cb.checked = state.showTemperature;
+    }
+
+    function filterTemperatureByDate(startTs, endTs) {
+      if (!hasTemperatureData()) return [];
+      return filterByDate(state.siteData.temperatures, startTs, endTs)
+        .map(([ts, v]) => [ts, v]);
     }
 
     function updateSpanButtons() {
@@ -505,10 +558,40 @@
     function computeStats(points) {
       if (!points.length) return { total: 0, peak: 0, avgDaily: 0 };
       const total = points.reduce((sum, [, v]) => sum + v, 0);
-      const peak = Math.max(...points.map(([, v]) => v));
-      const dates = new Set(points.map(([ts]) => ts.slice(0, 10)));
+      let peak = -Infinity;
+      const dates = new Set();
+      for (const [ts, v] of points) {
+        if (v > peak) peak = v;
+        dates.add(ts.slice(0, 10));
+      }
       const avgDaily = total / dates.size;
       return { total, peak, avgDaily };
+    }
+
+    function decimateForDisplay(points, maxPoints) {
+      if (points.length <= maxPoints) return points;
+      const step = Math.ceil(points.length / maxPoints);
+      const out = [];
+      for (let i = 0; i < points.length; i += step) out.push(points[i]);
+      const last = points[points.length - 1];
+      if (out[out.length - 1][0] !== last[0]) out.push(last);
+      return out;
+    }
+
+    function lineTrace({ x, y, name, color, width, yaxis, xaxis, hovertemplate, useGl = true }) {
+      const trace = {
+        x,
+        y,
+        // scattergl is fast but does not render in Plotly's rangeslider (SVG).
+        type: useGl && x.length > GL_THRESHOLD ? "scattergl" : "scatter",
+        mode: "lines",
+        line: { color, width: width || 1.5 },
+        name,
+        hovertemplate,
+      };
+      if (yaxis) trace.yaxis = yaxis;
+      if (xaxis) trace.xaxis = xaxis;
+      return trace;
     }
 
     function updateChart() {
@@ -521,12 +604,16 @@
 
       const points = filterByDate(state.siteData.readings, filterStartTs, filterEndTs)
         .map(([ts, v]) => [ts, v]);
+      const tempPoints = state.showTemperature
+        ? filterTemperatureByDate(filterStartTs, filterEndTs)
+        : [];
       const isPower = state.unit === "kW";
       const factor = unitFactor();
       const intervalLabel = isPower
         ? "15-minute average demand (kW)"
         : "15-minute interval energy (kWh)";
       const windows = buildWindowShapes(startInput, endInput);
+      const showTemp = state.showTemperature && tempPoints.length > 0;
 
       renderStats(points);
       // Remember the loaded window so a double-click (autorange) can restore it
@@ -540,27 +627,47 @@
           (windows.adjacentCount ? ` (${windows.adjacentCount} adjacent)` : "")
         : "";
       const timeNote = tz ? `Times shown in ${tz}.` : "Times shown in UTC.";
+      const tempNote = showTemp ? " Temperature from Open-Meteo ERA5." : "";
       document.getElementById("chart-note").textContent =
-        `${intervalLabel} · ${timeNote}${windowNote}`;
+        `${intervalLabel} · ${timeNote}${windowNote}${tempNote}`;
 
       if (!points.length) {
         Plotly.purge("chart");
+        state.chartPlotted = false;
         document.getElementById("chart").innerHTML =
           '<p class="empty-state">No data in selected date range.</p>';
         return;
       }
 
       const axisTitle = tz ? `Date/time (${tz})` : "Date/time (UTC)";
+      // Demand stays at full 15-minute resolution; only decimate the optional
+      // temperature overlay for performance (it does not affect the range slider).
+      const chartPoints = points;
+      const chartTempPoints = decimateForDisplay(tempPoints, TEMP_DISPLAY_MAX_POINTS);
 
-      const traces = [{
-        x: points.map(([ts]) => utcTsToDisplay(ts)),
-        y: points.map(([, v]) => v * factor),
-        type: "scatter",
-        mode: "lines",
-        line: { color: "#1a73e8", width: 1.5 },
-        name: `Site ${state.siteData.site_id}`,
-        hovertemplate: `%{y:,.1f} ${state.unit}<extra></extra>`,
-      }];
+      const traces = [
+        lineTrace({
+          x: chartPoints.map(([ts]) => utcTsToDisplay(ts)),
+          y: chartPoints.map(([, v]) => v * factor),
+          color: "#1a73e8",
+          width: 1.5,
+          name: `Site ${state.siteData.site_id}`,
+          hovertemplate: `%{y:,.1f} ${state.unit}<extra></extra>`,
+          useGl: false,
+        }),
+      ];
+      if (showTemp) {
+        traces.push(lineTrace({
+          x: chartTempPoints.map(([ts]) => utcTsToDisplay(ts)),
+          y: chartTempPoints.map(([, v]) => v),
+          color: "#c62828",
+          width: 1.25,
+          name: "Temperature",
+          xaxis: "x2",
+          yaxis: "y2",
+          hovertemplate: "%{y:,.1f} °C<extra></extra>",
+        }));
+      }
       // Legend proxies so the window colors are explained (shapes have no legend).
       if (windows.count) {
         traces.push(legendProxy("Shaved window", WINDOW_COLORS.normal.line));
@@ -570,31 +677,51 @@
       }
 
       state.syncingFromChart = true;
-      Plotly.newPlot(
-        "chart",
-        traces,
-        {
-          margin: { t: 28, r: 24, b: 48, l: 56 },
-          dragmode: "zoom",
-          xaxis: {
-            title: axisTitle,
-            type: "date",
-            fixedrange: false,
-            rangeslider: { visible: true, thickness: 0.12 },
-          },
-          yaxis: { title: isPower ? "Demand (kW)" : "Energy (kWh)" },
-          hovermode: "x unified",
-          shapes: windows.shapes,
-          showlegend: true,
-          legend: { orientation: "h", x: 0, y: 1.12, font: { size: 11 } },
+      const layout = {
+        margin: { t: 28, r: showTemp ? 64 : 24, b: 48, l: 56 },
+        dragmode: "zoom",
+        xaxis: {
+          title: axisTitle,
+          type: "date",
+          fixedrange: false,
+          rangeslider: { visible: true, thickness: 0.12 },
         },
-        {
-          responsive: true,
-          displayModeBar: true,
-          scrollZoom: true,
-          modeBarButtonsToRemove: ["lasso2d", "select2d"],
-        }
-      ).then(() => {
+        yaxis: { title: isPower ? "Demand (kW)" : "Energy (kWh)" },
+        hovermode: showTemp ? "x" : "x unified",
+        shapes: windows.shapes,
+        showlegend: true,
+        legend: { orientation: "h", x: 0, y: 1.12, font: { size: 11 } },
+      };
+      if (showTemp) {
+        layout.xaxis2 = {
+          matches: "x",
+          overlaying: "x",
+          showticklabels: false,
+          showgrid: false,
+        };
+        layout.yaxis2 = {
+          title: "Temperature (°C)",
+          overlaying: "y",
+          side: "right",
+          showgrid: false,
+          titlefont: { color: "#c62828" },
+          tickfont: { color: "#c62828" },
+        };
+      }
+
+      const chartEl = document.getElementById("chart");
+      const plotConfig = {
+        responsive: true,
+        displayModeBar: true,
+        scrollZoom: true,
+        modeBarButtonsToRemove: ["lasso2d", "select2d"],
+      };
+      const plotPromise = state.chartPlotted
+        ? Plotly.react(chartEl, traces, layout, plotConfig)
+        : Plotly.newPlot(chartEl, traces, layout, plotConfig);
+
+      plotPromise.then(() => {
+        state.chartPlotted = true;
         state.syncingFromChart = false;
         bindChartRelayout();
       });
@@ -734,6 +861,16 @@
       updateChart();
     });
 
+    document.getElementById("temperature-overlay").addEventListener("change", (e) => {
+      state.showTemperature = e.target.checked;
+      // Rebuild from scratch so the secondary y-axis is added/removed cleanly.
+      if (state.chartPlotted) {
+        Plotly.purge("chart");
+        state.chartPlotted = false;
+      }
+      updateChart();
+    });
+
     document.getElementById("span-buttons").addEventListener("click", (e) => {
       const btn = e.target.closest(".span-btn");
       if (!btn) return;
@@ -741,6 +878,7 @@
       clearMonthSelection();
       updateSpanButtons();
       const range = computeRange(
+        document.getElementById("start-datetime").value,
         document.getElementById("end-datetime").value,
         state.activeSpan,
         Boolean(siteTimezone()),
@@ -785,13 +923,20 @@
 
     function resetControls() {
       const tz = siteTimezone();
-      const endLocal = tz ? utcToLocalWallTs(DATA_MAX_TS, tz) : DATA_MAX_TS;
-      const range = computeRange(toDatetimeLocalValue(endLocal), "all", Boolean(tz), tz);
+      const range = computeRange(
+        document.getElementById("start-datetime").value,
+        document.getElementById("end-datetime").value,
+        "all",
+        Boolean(tz),
+        tz
+      );
       applyRangeToInputs(range);
       state.activeSpan = "all";
       state.unit = "kW";
+      state.showTemperature = true;
       updateSpanButtons();
       updateUnitButtons();
+      updateTemperatureControl();
     }
 
     function showLoadError(siteId, message) {
@@ -815,6 +960,7 @@
         state.selectedSite = { site_id: siteMeta.site_id, timezone: siteMeta.timezone };
         chartPanel.classList.remove("hidden");
         resetControls();
+        updateTemperatureControl();
         renderSummary();
         updateChart();
       } catch (err) {
@@ -847,6 +993,7 @@
         document.getElementById("site-meta").textContent = subtitle;
         chartPanel.classList.remove("hidden");
         resetControls();
+        updateTemperatureControl();
         renderSummary();
         updateChart();
       } catch (err) {

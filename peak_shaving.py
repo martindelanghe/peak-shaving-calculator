@@ -11,6 +11,7 @@ import argparse
 import json
 import shutil
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -63,6 +64,20 @@ def local_series_15min(raw: pd.DataFrame, tz: str) -> pd.Series:
     """
     s = pd.Series(raw["value"].to_numpy(), index=raw.index).tz_convert(tz)
     return s.resample("15min").sum(min_count=3)
+
+
+def load_temperature_readings(weather_path: Path) -> list:
+    """Load companion 15-minute temperature series from fetch_weather.py output."""
+    if not weather_path.exists():
+        return []
+    df = pd.read_csv(weather_path)
+    idx = pd.to_datetime(df["dttm_utc"], utc=True)
+    temps = pd.to_numeric(df["temperature_c"], errors="coerce")
+    return [
+        [ts.strftime(TS_FMT), round(float(v), 2)]
+        for ts, v in zip(idx, temps)
+        if pd.notna(v)
+    ]
 
 
 def build_timeseries(raw: pd.DataFrame) -> list:
@@ -178,15 +193,36 @@ def analyze_month(e: np.ndarray, index: pd.DatetimeIndex, N: int, L: int):
     }
 
 
-def process_customer(raw: pd.DataFrame, tz: str, N: int, L: int) -> list:
+def analysis_series(raw: pd.DataFrame, tz: str) -> pd.Series:
+    """15-minute local energy series used for monthly analysis (partial month dropped)."""
     s = local_series_15min(raw, tz)
-    # Drop a leading partial month (e.g. the Dec 2011 spillover created by
-    # converting UTC-aligned 2012 data to local time).
     if len(s):
         first = s.index[0]
         if not (first.day == 1 and first.hour == 0 and first.minute == 0):
             cutoff = (first + pd.offsets.MonthBegin(1)).normalize()
             s = s[s.index >= cutoff]
+    return s
+
+
+def compute_load_factor(raw: pd.DataFrame, tz: str) -> dict:
+    """Annual load factor = average kW / peak kW from 15-minute local intervals."""
+    s = analysis_series(raw, tz).dropna()
+    if s.empty:
+        return {"avg_kw": None, "peak_kw": None, "load_factor": None}
+    total_kwh = float(s.sum())
+    hours = len(s) * 0.25
+    avg_kw = total_kwh / hours
+    peak_kw = float(s.max()) * 4.0
+    load_factor = avg_kw / peak_kw if peak_kw > 0 else None
+    return {
+        "avg_kw": round(avg_kw, 3),
+        "peak_kw": round(peak_kw, 3),
+        "load_factor": round(load_factor, 4) if load_factor is not None else None,
+    }
+
+
+def process_customer(raw: pd.DataFrame, tz: str, N: int, L: int) -> list:
+    s = analysis_series(raw, tz)
     month_key = s.index.year * 100 + s.index.month
     months = []
     for _, sub in s.groupby(month_key):
@@ -209,9 +245,13 @@ def write_site_chart_data(
     info: dict,
     months: list,
     params: dict,
+    weather_dir: Optional[Path] = None,
 ) -> None:
     """Write a self-contained per-site JSON consumed by the chart tab."""
     readings = build_timeseries(raw)
+    temperatures = []
+    if weather_dir is not None:
+        temperatures = load_temperature_readings(weather_dir / f"{site_id}.csv")
     payload = {
         "site_id": site_id,
         "unit": "kWh",
@@ -225,6 +265,7 @@ def write_site_chart_data(
         },
         "months": months,
         "readings": readings,
+        "temperatures": temperatures,
     }
     sites_dir = out_dir / "data" / "sites"
     sites_dir.mkdir(parents=True, exist_ok=True)
@@ -251,6 +292,12 @@ def main():
                     help="Optional subset of site IDs to process")
     ap.add_argument("--no-site-charts", action="store_true",
                     help="Skip writing per-site time-series JSON for the charts")
+    ap.add_argument(
+        "--weather-dir",
+        default="csv-only/weather",
+        type=Path,
+        help="Directory with per-site temperature CSVs (from fetch_weather.py)",
+    )
     args = ap.parse_args()
 
     site_meta = load_site_meta(args.meta)
@@ -273,13 +320,17 @@ def main():
         raw = load_raw(csv_path)
         months = process_customer(raw, tz, args.num_peaks, args.max_window)
         results["customers"][site_id] = months
+        load = compute_load_factor(raw, tz)
         results["meta"][site_id] = {
             "industry": info.get("industry", "Unknown"),
             "sub_industry": info.get("sub_industry", "Unknown"),
             "sq_ft": info.get("sq_ft"),
+            **load,
         }
         if not args.no_site_charts:
-            write_site_chart_data(args.out, site_id, raw, info, months, params)
+            write_site_chart_data(
+                args.out, site_id, raw, info, months, params, args.weather_dir
+            )
         print(f"processed site {site_id} ({tz})")
 
     json_path = args.out / "results.json"

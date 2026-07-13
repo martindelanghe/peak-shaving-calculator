@@ -11,6 +11,7 @@
     --muted: #64748b;
     --accent: #1a73e8;
     --avg-w: 96px;
+    --lf-w: 72px;
     --site-w: 78px;
   }
   * { box-sizing: border-box; }
@@ -82,7 +83,7 @@
     min-width: var(--site-w);
   }
   thead th.abs-head {
-    left: var(--site-w);
+    left: calc(var(--site-w) + var(--lf-w));
     z-index: 4;
     text-align: right;
     width: var(--avg-w);
@@ -90,12 +91,21 @@
     color: var(--text);
   }
   thead th.pct-head {
-    left: calc(var(--site-w) + var(--avg-w));
+    left: calc(var(--site-w) + var(--lf-w) + var(--avg-w));
     z-index: 4;
     text-align: right;
     width: var(--avg-w);
     min-width: var(--avg-w);
     color: var(--text);
+  }
+  thead th.lf-head {
+    left: var(--site-w);
+    z-index: 4;
+    text-align: right;
+    width: var(--lf-w);
+    min-width: var(--lf-w);
+    color: var(--text);
+    border-right: 1px solid var(--border);
   }
   tbody th.site {
     position: sticky;
@@ -126,9 +136,13 @@
     font-weight: 650;
     color: var(--text);
   }
-  tbody td.abs { left: var(--site-w); }
+  tbody td.abs { left: calc(var(--site-w) + var(--lf-w)); }
   tbody td.pct {
-    left: calc(var(--site-w) + var(--avg-w));
+    left: calc(var(--site-w) + var(--lf-w) + var(--avg-w));
+    border-right: 1px solid var(--border);
+  }
+  tbody td.lf {
+    left: var(--site-w);
     border-right: 1px solid var(--border);
   }
   thead th.pct-head { border-right: 1px solid var(--border); }
@@ -488,6 +502,18 @@ function monthLabel(m) {
   return `${names[Number(mo) - 1]} ${y}`;
 }
 
+function loadFactorOf(id) {
+  const m = META[id];
+  return (m && m.load_factor != null) ? m.load_factor : null;
+}
+function fmtLoadFactor(v) {
+  if (v === null) return "&ndash;";
+  return (v * 100).toLocaleString(undefined, {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  }) + "%";
+}
+
 function render() {
   const key = METRICS[metric].key;
   let max = 0;
@@ -501,9 +527,10 @@ function render() {
   const fam = FAMILY[familyOf(metric)];
   const absKey = METRICS[fam.abs].key;
   const pctKey = METRICS[fam.pct].key;
-  const totalCols = months.length + 3;
+  const totalCols = months.length + 4;
   let html = "<thead><tr>"
     + `<th class="site-head">Customer</th>`
+    + `<th class="lf-head">Load factor</th>`
     + `<th class="abs-head">Avg ${METRICS[fam.abs].unit}</th>`
     + `<th class="pct-head">Avg %</th>`;
   for (const m of months) html += `<th>${monthLabel(m)}</th>`;
@@ -524,8 +551,12 @@ function render() {
       const pctCell = avgPct === null
         ? `<td class="avg pct empty">&ndash;</td>`
         : `<td class="avg pct">${fmtNum(avgPct, true)}</td>`;
+      const lf = loadFactorOf(id);
+      const lfCell = lf === null
+        ? `<td class="avg lf empty">&ndash;</td>`
+        : `<td class="avg lf" title="Avg ${(META[id] && META[id].avg_kw != null) ? META[id].avg_kw.toLocaleString() : "?"} kW / peak ${(META[id] && META[id].peak_kw != null) ? META[id].peak_kw.toLocaleString() : "?"} kW">${fmtLoadFactor(lf)}</td>`;
       const siteLink = `<a href="site_chart.html?site=${encodeURIComponent(id)}" target="_blank" rel="noopener" title="Open time-series chart for site ${id}">${id}</a>`;
-      html += `<tr><th class="site">${siteLink}</th>${absCell}${pctCell}`;
+      html += `<tr><th class="site">${siteLink}</th>${lfCell}${absCell}${pctCell}`;
       for (const m of months) {
         const rec = lookup[id][m];
         if (rec) {

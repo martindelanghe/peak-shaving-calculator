@@ -51,6 +51,9 @@ new tab for that site. The detail page shows:
 - A units toggle (kW / kWh). The chart defaults to average demand in **kW**
   (interval energy x 4, since a 15-minute interval is a quarter hour); switch
   to **kWh** to see the raw interval energy.
+- A **Temperature overlay** checkbox (on by default) plots Open-Meteo ERA5 air
+  temperature on a secondary right axis when weather data is present. Uncheck
+  to hide the overlay.
 - Shaved peak windows are flagged as shaded bands on the chart: green for a
   standalone window and orange (dashed) for a window that is adjacent to
   (immediately follows) another shaved window.
@@ -122,8 +125,28 @@ month (e.g. Dec 2011); that partial month is dropped from the analysis.
 Timestamps are in the site's local timezone. `contiguous` is true when the
 window immediately follows another shaved window.
 
+## Weather data (Open-Meteo)
+
+Companion temperature CSVs can be generated from the [Open-Meteo ERA5
+archive](https://open-meteo.com/en/docs/historical-weather-api) using each
+site's lat/lng from the metadata file. The API returns hourly `temperature_2m`;
+the script linearly interpolates to a 15-minute UTC grid aligned with the
+energy readings.
+
+```bash
+.venv/bin/python fetch_weather.py \
+  --meta csv-only/meta/all_sites.csv \
+  --out csv-only/weather \
+  --start 2012-01-01 --end 2012-12-31
+```
+
+Use `--sites 8 14` to fetch a subset. Output is one file per site:
+
+- `csv-only/weather/{id}.csv` — columns `dttm_utc`, `temperature_c`
+
 ## Data
 
 The `csv-only/` folder contains the EnerNOC GreenButton dataset: anonymized
 5-minute kWh readings for 100 commercial/industrial sites for 2012, with site
-metadata (industry, square footage, timezone) in `csv-only/meta/`.
+metadata (industry, square footage, timezone, lat/lng) in `csv-only/meta/`.
+Temperature CSVs (when generated) live in `csv-only/weather/`.
