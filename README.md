@@ -150,3 +150,18 @@ The `csv-only/` folder contains the EnerNOC GreenButton dataset: anonymized
 5-minute kWh readings for 100 commercial/industrial sites for 2012, with site
 metadata (industry, square footage, timezone, lat/lng) in `csv-only/meta/`.
 Temperature CSVs (when generated) live in `csv-only/weather/`.
+
+That folder is not in git (it is large and licensed CC BY-NC 3.0). Download the
+CSV-only archive from EnerNOC's open data bucket and unpack it in the repo
+root:
+
+```bash
+curl -L -o csv-only.tar.gz \
+  https://open-enernoc-data.s3.amazonaws.com/anon/csv-only.tar.gz
+tar -xzf csv-only.tar.gz
+```
+
+The listing page is
+[open-enernoc-data.s3.amazonaws.com/anon](https://open-enernoc-data.s3.amazonaws.com/anon/index.html).
+Weather files are not in that archive; generate them with `fetch_weather.py`
+as described above.
